@@ -1,0 +1,4 @@
+users/*
+tracker.json
+.env
+__pycache__
