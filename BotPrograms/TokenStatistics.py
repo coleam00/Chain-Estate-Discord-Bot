@@ -10,14 +10,22 @@ import threading
 
 API_KEY = os.environ["CovalenthqApiKey"]
 CONTRACT_ADDRESS = os.environ["CovalenthqContractAddress"]
-messageChannelId = os.environ["ChainEstateBotMessageChannelId"]
+defaultChannelId = os.environ["ChainEstateBotMessageChannelId"]
 CHAIN_ID = 56
 CONTRACT_ABI = '[{"inputs": [{"internalType": "address","name": "account","type": "address"}],"name": "balanceOf","outputs": [{"internalType": "uint256","name": "","type": "uint256"}],"stateMutability": "view","type": "function"}]'
 BINANCE_RPC_URL = "https://bsc-dataseed.binance.org/"
 
-timeBetweenStatGenerations = 600
-timeBetweenMessagingStats = 20
+defaultExcludedAddresses = [
+    "0x965C421073f0aD56a11b2E3aFB80C451038F6178", "0x4abAc87EeC0AD0932B71037b5d1fc88B7aC2Defd",
+    "0x9406B17dE6949aB3F32e7c6044b0b29e1987f9ab", "0xB164Eb7844F3A05Fd3eF01CF05Ac4961a74D47fF",
+    "0x000000000000000000000000000000000000dEaD"
+]
+
+defaultTimeBetweenStatGenerations = 600
+defaultTimeBetweenMessagingStats = 20
 numIterations = 100000
+
+configItems = ["contractAddress", "channelId", "timeBetweenStatGenerations", "timeBetweenMessagingStats", "addExcludedAddress"]
 
 # Wrapper function to call generateTokenStatistics so there isn't a huge stack trace.
 async def callGenerateTokenStatistics():
@@ -39,6 +47,24 @@ async def generateTokenStatistics():
     w3 = Web3(provider)
     token = w3.eth.contract(address=Web3.toChecksumAddress(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
 
+    contractAddress = CONTRACT_ADDRESS
+    timeBetweenStatGenerations = defaultTimeBetweenStatGenerations
+    timeBetweenMessagingStats = defaultTimeBetweenMessagingStats
+    excludedAddresses = defaultExcludedAddresses
+
+    if os.path.exists("config.json"):
+        with open("config.json", "r") as configFile:
+            configJson = json.load(configFile)
+
+        if "contractAddress" in configJson:
+            contractAddress = configJson["contractAddress"]
+        if "timeBetweenStatGenerations" in configJson:
+            timeBetweenStatGenerations = configJson["timeBetweenStatGenerations"]
+        if "addExcludedAddresses" in configJson:
+            excludedAddresses = configJson["addExcludedAddresses"]
+
+    if not os.path.exists("data"):
+        os.mkdir("data")
 
     if not os.path.exists("data/tracker.json"):
         with open("data/tracker.json", "w") as jsonFile:
@@ -91,9 +117,13 @@ async def generateTokenStatistics():
             tracker["uniqueHashes"].append(uniqueHash)
 
     tracker["brackets"] = {}
-    balances = tracker["balances"].values()
+    balances = []
+    for address, balance in tracker["balances"].items():
+        if address not in excludedAddresses:
+            balances.append(balance)
+
     maxBalance = float(max(balances)) / 10.0 ** 18
-    print(maxBalance)
+    print(f"Max balance is: {maxBalance}")
     numDigits = len(str(int(maxBalance))) - 1
     startingDigits = 3
     currDigits = startingDigits
@@ -123,12 +153,13 @@ async def generateTokenStatistics():
                     tracker["brackets"][bracket] += 1
                     break
 
-    with open("data/tracker.json", "w") as trackerFile:
-        json.dump(tracker, trackerFile)
+    if os.path.exists("data/tracker.json"):
+        with open("data/tracker.json", "w") as trackerFile:
+            json.dump(tracker, trackerFile)
 
-    print(f"Number of transactions: {len(tracker['uniqueHashes'])}")
+        print(f"Number of transactions: {len(tracker['uniqueHashes'])}")
 
-    await asyncio.sleep(timeBetweenStatGenerations)
+    await asyncio.sleep(int(timeBetweenStatGenerations))
     return
 
 
@@ -141,6 +172,18 @@ async def messageTokenStatistics(client):
     with open("data/tracker.json", "r") as jsonFile:
         trackerJson = json.load(jsonFile)
 
+    channelId = defaultChannelId
+    timeBetweenMessagingStats = defaultTimeBetweenMessagingStats
+
+    if os.path.exists("config.json"):
+        with open("config.json", "r") as configFile:
+            configJson = json.load(configFile)
+
+        if "channelId" in configJson:
+            channelId = configJson["channelId"]
+        if "timeBetweenMessagingStats" in configJson:
+            timeBetweenMessagingStats = configJson["timeBetweenMessagingStats"]
+
     brackets = trackerJson["brackets"]
     numHolders = 0
     for value in brackets.values():
@@ -151,7 +194,50 @@ async def messageTokenStatistics(client):
         holderPercentage = '{:.2f}'.format((float(value)/float(numHolders))*100)
         statsMessage += f"{bracket}: {value} holders ({holderPercentage}%)\n"
 
-    messageChannel = await client.fetch_channel(messageChannelId)
+    messageChannel = await client.fetch_channel(channelId)
     await messageChannel.send(statsMessage)
-    await asyncio.sleep(timeBetweenMessagingStats)
+    await asyncio.sleep(int(timeBetweenMessagingStats))
     return
+
+# Function to set the contract address, time between stat generations, time between stat messages, and the channel ID to message
+async def setConfig(message):
+    messageArgs = message.content.split(' ')
+    if len(messageArgs) != 3:
+        await message.channel.send("Invalid arguments for the command.")
+        return
+
+    configItem = messageArgs[1]
+    configValue = messageArgs[2]
+
+    if configItem not in configItems:
+        await message.channel.send("Config item to change must be contractAddress, channelId, timeBetweenStatGenerations, timeBetweenMessagingStats, or addExcludedAddress.")
+        return
+
+    if configItem == "addExcludedAddress":
+        configValue = [configValue]
+
+    if not os.path.exists("config.json"):
+        configJson = {configItem: configValue}
+        with open("config.json", "w") as configFile:
+            json.dump(configJson, configFile)
+    else:
+        with open("config.json", "r") as configFile:
+            configJson = json.load(configFile)
+
+        if configItem == "addExcludedAddress":
+            if configItem in configJson.keys():
+                configJson[configItem] = configJson[configItem] + configValue
+            else:
+                configJson[configItem] = configValue
+        else:
+            configJson[configItem] = configValue
+
+        with open("config.json", "w") as configFile:
+            json.dump(configJson, configFile)
+
+    await message.channel.send(f"Set {configItem} to {configValue}")
+
+# Function to delete tracker.json when a contract address is changed.
+async def resetStats(message):
+    os.remove("data/tracker.json")
+    await messasge.channel.send("Deleted the tracker JSON file to reset the token holding statistics.")

@@ -9,6 +9,8 @@ from BotPrograms.TokenStatistics import *
 intents = discord.Intents.all()
 client = discord.Client(intents=intents)
 
+adminUsers = ["colepm#6118", "Zachlm#3699"]
+
 @client.event
 async def on_ready():
     print(f'Chain Estate DAO bot is logged in as {client.user}')
@@ -65,21 +67,22 @@ async def on_message(message):
         return
 
     # Creates the userfile if necessary.
-    if not os.path.isfile(f"users/{message.author}.json"):
-        userFile = open(f"users/{message.author}.json", 'w')
+    messageAuthor = str(message.author).strip("<>:\"/\\|?*")
+    if not os.path.isfile(f"users/{messageAuthor}.json"):
+        userFile = open(f"users/{messageAuthor}.json", 'w')
         userFile.write("{}")
         userFile.close()
 
     # Makes sure the user isn't sending too many messages.
     if message.content.startswith("$"):
         # Gets the data for the user.
-        with open(f"users/{message.author}.json", 'r') as userFile:
+        with open(f"users/{messageAuthor}.json", 'r') as userFile:
             userJson = json.load(userFile)
 
         rateLimited = await rateLimit(message, userJson)
 
         # Saves the rate limit data to the user's JSON file.
-        with open(f"users/{message.author}.json", 'w') as userFile:
+        with open(f"users/{messageAuthor}.json", 'w') as userFile:
             json.dump(userJson, userFile)
 
         if rateLimited:
@@ -87,10 +90,28 @@ async def on_message(message):
 
     if message.content.startswith('$hello'):
         await message.channel.send('Greetings from the Chain Estate DAO bot!')
+
+    if message.content.startswith('$getChannelId'):
         await message.channel.send(message.channel.id)
 
-    if message.content.startswith('$message-stats') and str(message.author) in ["colepm#6118", "Zachlm#3699"]:
-        await callMessageTokenStatistics(client)
+    # Command to set the contract address, time between stat generations, time between stat messages, and the channel ID to message
+    if message.content.startswith('$setConfig'):
+        if str(message.author) not in adminUsers:
+            await message.channel.send("Only Chain Estate DAO admins can use this command.")
+        else:
+            await setConfig(message)
+
+    if message.content.startswith('resetStats'):
+        if str(message.author) not in adminUsers:
+            await message.channel.send("Only Chain Estate DAO admins can use this command.")
+        else:
+            await resetStats(message)
+
+    if message.content.startswith('$message-stats'):
+        if str(message.author) not in adminUsers:
+            await message.channel.send("Only Chain Estate DAO admins can use this command.")
+        else:
+            await callMessageTokenStatistics(client)
 
 
 client.run(os.environ["ChainEstateBotToken"])
